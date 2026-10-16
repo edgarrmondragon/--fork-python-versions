@@ -170,8 +170,11 @@ if ($IsZip) {
     @{ install_dir = $PyManagerInstallDir; automatic_install = $false; confirm = $false } | ConvertTo-Json | Out-File -FilePath $PyManagerConfig -Encoding utf8
     $Env:PYTHON_MANAGER_CONFIG = $PyManagerConfig
 
+    # The index has a single package, so its tag (the ID without the company, e.g. 3.16t-64) is unambiguous.
+    # --by-id can't be used, as the install manager fails to register an install when given IDs instead of tags.
+    $PythonPackageTag = $PythonPackageId -replace "^[^-]+-", ""
     Write-Host "Install Python $Version ($PythonPackageId) in $PyManagerInstallDir..."
-    & $PyManager install --by-id --force -y --source "$PWD\index.json" $PythonPackageId
+    & $PyManager install --force -y --source "$PWD\index.json" $PythonPackageTag
     if ($LASTEXITCODE -ne 0) {
         Throw "Error happened during Python installation"
     }
