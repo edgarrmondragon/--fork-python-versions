@@ -26,6 +26,7 @@ class WinPythonBuilder : PythonBuilder {
     [string] $InstallationScriptName
     [string] $OutputArtifactName
     [string] $PackageLocation
+    [string] $PackageId
 
     WinPythonBuilder(
         [semver] $version,
@@ -88,15 +89,15 @@ class WinPythonBuilder : PythonBuilder {
         return Invoke-RestMethod -Uri $manifestUri
     }
 
-    [string] DownloadPackage([object] $manifest, [string] $packageId) {
+    [string] DownloadPackage([object] $manifest, [string] $manifestId) {
         <#
         .SYNOPSIS
         Download a package listed in the Windows release manifest and validate its SHA-256 hash.
         #>
 
-        $package = $manifest.versions | Where-Object { $_.id -eq $packageId }
+        $package = $manifest.versions | Where-Object { $_.id -eq $manifestId }
         if ($null -eq $package) {
-            throw "Package '$packageId' not found in the Windows release manifest"
+            throw "Package '$manifestId' not found in the Windows release manifest"
         }
 
         Write-Host "Sources URI: $($package.url)"
@@ -108,7 +109,26 @@ class WinPythonBuilder : PythonBuilder {
             throw "SHA-256 mismatch for $($package.url): expected $($package.hash.sha256), got $actualHash"
         }
 
+        $this.CreateOfflineIndex($package, $packagePath)
+
         return $packagePath
+    }
+
+    [void] CreateOfflineIndex([object] $package, [string] $packagePath) {
+        <#
+        .SYNOPSIS
+        Write an index.json next to the package, so that the Python install manager can install it offline.
+
+        .DESCRIPTION
+        The index has a single entry, the same one as in the Windows release manifest, but with a URL relative to the index.
+        #>
+
+        $entry = $package | ConvertTo-Json -Depth 10 | ConvertFrom-Json
+        $entry.url = [IO.Path]::GetFileName($packagePath)
+
+        $indexPath = Join-Path $this.WorkFolderLocation "index.json"
+        @{ versions = @($entry) } | ConvertTo-Json -Depth 10 | Out-File -FilePath $indexPath -Encoding utf8
+        Write-Debug "Done; Index location: $indexPath"
     }
 
     [string] GetPythonExtension() {
@@ -163,15 +183,17 @@ class WinPythonBuilder : PythonBuilder {
             $manifest = $this.GetManifest()
 
             # The "pythontest" package is "pythoncore" plus Lib/test, for consistency with the legacy installers.
-            $packageId = $this.GetManifestPackageId("pythontest", $this.IsFreeThreaded())
+            $manifestId = $this.GetManifestPackageId("pythontest", $this.IsFreeThreaded())
 
             # 3.16.0a1 has no free-threaded "pythontest" package, so fall back to "pythoncore" (no Lib/test) for those.
-            if (-not ($manifest.versions | Where-Object { $_.id -eq $packageId })) {
-                Write-Host "Package '$packageId' not found, using 'pythoncore' instead"
-                $packageId = $this.GetManifestPackageId("pythoncore", $this.IsFreeThreaded())
+            if (-not ($manifest.versions | Where-Object { $_.id -eq $manifestId })) {
+                Write-Host "Package '$manifestId' not found, using 'pythoncore' instead"
+                $manifestId = $this.GetManifestPackageId("pythoncore", $this.IsFreeThreaded())
             }
 
-            return $this.DownloadPackage($manifest, $packageId)
+            $this.PackageId = $manifestId
+
+            return $this.DownloadPackage($manifest, $manifestId)
         }
 
         $sourceUri = $this.GetSourceUri()
@@ -203,7 +225,8 @@ class WinPythonBuilder : PythonBuilder {
             "{{__ARCHITECTURE__}}" = $this.Architecture;
             "{{__HARDWARE_ARCHITECTURE__}}" = $this.GetHardwareArchitecture();
             "{{__VERSION__}}" = $this.Version;
-            "{{__PYTHON_EXEC_NAME__}}" = $pythonExecName
+            "{{__PYTHON_EXEC_NAME__}}" = $pythonExecName;
+            "{{__PYTHON_PACKAGE_ID__}}" = $this.PackageId
         }
 
         $variablesToReplace.keys | ForEach-Object { $installationTemplateContent = $installationTemplateContent.Replace($_, $variablesToReplace[$_]) }

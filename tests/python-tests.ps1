@@ -80,15 +80,13 @@ Describe "Tests" {
             $pipLocation.startsWith($expectedPath) | Should -BeTrue
         }
 
-        # TODO: Python 3.16+ is extracted from a package, so it is not registered for the legacy py.exe launcher
-        $SkipPyLauncher = [semver]$Version -ge [semver]"3.16.0-alpha.1"
-        It "py.exe finds Python" -Skip:$SkipPyLauncher {
+        It "py.exe finds Python" {
             $suffix = if ($Architecture -match "-freethreaded") { "t" } else { "" }
             $major, $minor = "$Version".Split(".")[0..1]
             $pyLocation = py "-$major.$minor$suffix" -c "import sys; print(sys.executable)"
             $LASTEXITCODE | Should -Be 0
-            $expectedPath = Join-Path -Path $env:RUNNER_TOOL_CACHE -ChildPath "Python"
-            $pyLocation.startsWith($expectedPath) | Should -BeTrue
+            # Python 3.16+ is installed by the Python install manager, in a directory next to the "Python" toolcache folder
+            $pyLocation.startsWith($env:RUNNER_TOOL_CACHE) | Should -BeTrue
         }
     }
 

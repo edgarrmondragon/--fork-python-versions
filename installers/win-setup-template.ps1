@@ -2,6 +2,38 @@
 [String] $HardwareArchitecture = "{{__HARDWARE_ARCHITECTURE__}}"
 [String] $Version = "{{__VERSION__}}"
 [String] $PythonExecName = "{{__PYTHON_EXEC_NAME__}}"
+[String] $PythonPackageId = "{{__PYTHON_PACKAGE_ID__}}"
+
+# Python install manager used to install Python 3.16+ packages (PEP 773)
+[String] $PyManagerVersion = "26.4"
+[String] $PyManagerSha256 = "ab8c6b8a484525b000e8e9453fde0ed6cdef762dd433622725696a8e1ef2df4e"
+
+function Get-PyManagerPath {
+    $Command = Get-Command pymanager -ErrorAction SilentlyContinue
+    if ($Command) {
+        return $Command.Source
+    }
+
+    Write-Host "Install Python install manager $PyManagerVersion"
+    $Installer = Join-Path -Path $env:TEMP -ChildPath "python-manager-$PyManagerVersion.msi"
+    Invoke-WebRequest -Uri "https://www.python.org/ftp/python/pymanager/python-manager-$PyManagerVersion.msi" -OutFile $Installer
+    $ActualHash = (Get-FileHash -Path $Installer -Algorithm SHA256).Hash
+    if ($ActualHash -ne $PyManagerSha256) {
+        Throw "SHA-256 mismatch for Python install manager: expected $PyManagerSha256, got $ActualHash"
+    }
+
+    $Process = Start-Process -FilePath msiexec.exe -ArgumentList "/i `"$Installer`" /qn /norestart" -Wait -PassThru
+    if ($Process.ExitCode -ne 0) {
+        Throw "Error happened during Python install manager installation (exit code $($Process.ExitCode))"
+    }
+
+    $Executable = Get-ChildItem -Path $env:ProgramFiles, ${env:ProgramFiles(x86)} -Filter pymanager.exe -Recurse -Depth 2 -ErrorAction SilentlyContinue | Select-Object -First 1
+    if (-not $Executable) {
+        Throw "Python install manager was installed, but pymanager.exe was not found"
+    }
+
+    return $Executable.FullName
+}
 
 function Get-RegistryVersionFilter {
     param(
@@ -121,15 +153,35 @@ if (-not $IsZip) {
 }
 
 Write-Host "Create Python $Version folder in $PythonToolcachePath"
-New-Item -ItemType Directory -Path $PythonArchPath -Force | Out-Null
+if ($IsZip) {
+    # $PythonArchPath is a junction to the install manager's directory
+    New-Item -ItemType Directory -Path $PythonVersionPath -Force | Out-Null
+} else {
+    New-Item -ItemType Directory -Path $PythonArchPath -Force | Out-Null
+}
 
 if ($IsZip) {
-    # Python 3.16+ is distributed as a package (PEP 773) that can be extracted and run as-is
-    Write-Host "Extract Python $Version in $PythonToolcachePath..."
-    Expand-Archive -Path ./$PythonExecName -DestinationPath $PythonArchPath -Force
+    # Python 3.16+ is distributed as a package (PEP 773) that is installed with the Python install manager.
+    # Installs are in a flat directory, named after the package ID, and registered for py.exe.
+    # The toolcache directory is a junction to it.
+    $PyManager = Get-PyManagerPath
+    $PyManagerInstallDir = Join-Path -Path $ToolcacheRoot -ChildPath "PythonManager"
+    $PyManagerConfig = Join-Path -Path $env:TEMP -ChildPath "pymanager.json"
+    @{ install_dir = $PyManagerInstallDir; automatic_install = $false; confirm = $false } | ConvertTo-Json | Out-File -FilePath $PyManagerConfig -Encoding utf8
+    $Env:PYTHON_MANAGER_CONFIG = $PyManagerConfig
+
+    Write-Host "Install Python $Version ($PythonPackageId) in $PyManagerInstallDir..."
+    & $PyManager install --by-id --force -y --source "$PWD\index.json" $PythonPackageId
+    if ($LASTEXITCODE -ne 0) {
+        Throw "Error happened during Python installation"
+    }
+
+    $PyManagerPythonPath = Join-Path -Path $PyManagerInstallDir -ChildPath $PythonPackageId
+    Write-Host "Link $PythonArchPath to $PyManagerPythonPath"
+    New-Item -ItemType Junction -Path $PythonArchPath -Target $PyManagerPythonPath | Out-Null
 
     # Debug symbols are only in the "pythontest" package and were not installed by the legacy installers
-    Get-ChildItem -Path $PythonArchPath -Recurse -Filter "*.pdb" | Remove-Item -Force
+    Get-ChildItem -Path $PyManagerPythonPath -Recurse -Filter "*.pdb" | Remove-Item -Force
 } else {
     Write-Host "Copy Python binaries to $PythonArchPath"
     Copy-Item -Path ./$PythonExecName -Destination $PythonArchPath | Out-Null
