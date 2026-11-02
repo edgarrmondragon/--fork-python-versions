@@ -83,7 +83,11 @@ Describe "Tests" {
         It "py.exe finds Python" {
             $suffix = if ($Architecture -match "-freethreaded") { "t" } else { "" }
             $major, $minor = "$Version".Split(".")[0..1]
-            $pyLocation = py "-$major.$minor$suffix" -c "import sys; print(sys.executable)"
+            $bits = if ($HardwareArchitecture -match "x86") { "32" } elseif ($HardwareArchitecture -match "arm64") { "arm64" } else { "64" }
+
+            # https://docs.python.org/3.15/using/windows.html#listing-runtimes
+            $pyLocation = py list -1 -f=exe "$major.$minor$suffix-$bits"
+
             $LASTEXITCODE | Should -Be 0
             # Python 3.16+ is installed by the Python install manager, in a directory next to the "Python" toolcache folder
             $pyLocation.startsWith($env:RUNNER_TOOL_CACHE) | Should -BeTrue
