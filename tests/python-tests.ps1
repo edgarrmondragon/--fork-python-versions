@@ -91,9 +91,14 @@ Describe "Tests" {
             if (-not $pyManager) {
                 $pyManager = Get-ChildItem -Path $env:ProgramFiles, ${env:ProgramFiles(x86)} -Filter pymanager.exe -Recurse -Depth 2 -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty FullName
             }
+            # The install manager only lists runtimes in its configured install directory, which setup points at the toolcache
+            $pyManagerConfig = Join-Path $env:RUNNER_TEMP "pymanager.json"
+            @{ install_dir = (Join-Path $env:RUNNER_TOOL_CACHE "PythonManager") } | ConvertTo-Json | Out-File -FilePath $pyManagerConfig -Encoding utf8
+            $env:PYTHON_MANAGER_CONFIG = $pyManagerConfig
             $pyLocation = & $pyManager list -1 -f=exe "$major.$minor$suffix-$bits"
 
             $LASTEXITCODE | Should -Be 0
+            $pyLocation | Should -Not -BeNullOrEmpty
             # Python 3.16+ is installed by the Python install manager, in a directory next to the "Python" toolcache folder
             $pyLocation.startsWith($env:RUNNER_TOOL_CACHE) | Should -BeTrue
         }
